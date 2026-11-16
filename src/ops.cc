@@ -265,14 +265,26 @@ float GetRedInitScalar(int red_op) {
 }
 
 uint64_t GetDynXBufBegin(const VectorKernel &k, NDObject *cur) {
-  uint64_t xnum = 1;
+  auto xbuf_size = [&k](NDObject *op) -> uint64_t {
+    if (op->NeedFullXbuf()) {
+      return k.tile_size_ * ITEM_SIZE[op->type_id_];
+    }
+    auto &dims = op->nd_.dims();
+    size_t i = dims.lead_dim();
+    int64_t size = RoundUp<int64_t>(dims[i], k.LeadAlign()) * ITEM_SIZE[op->type_id_];
+    for (++i; i < dims.size(); ++i) {
+      size *= dims[i];
+    }
+    return size;
+  };
+  uint64_t xbuf = cur->xbuf_ + xbuf_size(cur);
   for (size_t i = 0; i < k.static_ops_.size(); ++i) {
     auto op = i < k.load_num_ ? k.static_ops_[i] : k.static_ops_[i]->lhs_;
     if (op->index_ > cur->index_) {
-      xnum++;
+      xbuf += xbuf_size(op);
     }
   }
-  return cur->xbuf_ + xnum * k.tile_size_ * ITEM_SIZE[k.MaxType()];
+  return xbuf;
 }
 }  // namespace
 
@@ -1255,6 +1267,9 @@ void NDViewLoad::DimChanged(NDObject *op) {
     } else {
       acc_stride *= dims[i - 1];
       acc_nd *= dims[i];
+    }
+    // Complete the current reference-axis match for both merged and split axes.
+    if (acc_nd) {
       while (acc_ref < acc_nd) {
         acc_ref *= ref_shape[ref_idx--];
       }
@@ -1324,6 +1339,9 @@ void NDViewStore::DimChanged(NDObject *op) {
     } else {
       acc_stride *= dims[i - 1];
       acc_nd *= dims[i];
+    }
+    // Complete the current reference-axis match for both merged and split axes.
+    if (acc_nd) {
       while (acc_ref < acc_nd) {
         acc_ref *= ref_shape->data[ref_idx--];
       }
@@ -2166,7 +2184,7 @@ uint64_t PermuteOp::Emit(VectorKernel &k) {
   return EmitCopy(insn_, xbuf_, lhs_->xbuf_, ndd_.stride_back() * ITEM_SIZE[type_id_]);
 }
 
-NDObject *PermuteOp::Clone(CloneHelper &h) { return new PermuteOp(h.GetClone(lhs_), dims_ref_); }
+NDObject *PermuteOp::Clone(CloneHelper &h) { return new PermuteOp(h.GetClone(lhs_), h.GetClone(dims_ref_)); }
 
 void PermuteOp::Dump(bool verbose, std::ostringstream &oss) { oss << "Permute"; }
 
@@ -2825,7 +2843,7 @@ void BroadcastOp::Normalize(std::vector<NDObject *> &run_ops) {
 
 NDObject *BroadcastOp::Clone(CloneHelper &h) {
   auto lhs = stuff_ops_.empty() ? lhs_ : stuff_ops_.front()->lhs_;
-  return new BroadcastOp(h.GetClone(lhs), dst_shape_ref_);
+  return new BroadcastOp(h.GetClone(lhs), h.GetClone(dst_shape_ref_));
 }
 
 void BroadcastOp::ShapeProp(NDObject *op, int64_t &sym_dim_next) {

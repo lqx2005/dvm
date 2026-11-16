@@ -1338,7 +1338,7 @@ int64_t VectorKernel::TileSizeLimit(int64_t live_peak) {
     for (size_t i = 0; i < static_ops_.size(); ++i) {
       auto op = static_ops_[i];
       if ((i < load_num_ || !op->lhs_->NeedFullXbuf()) && !lead_pointwise(op->nd_.dims(), tile_depth)) {
-        peak_size -= init_size_limit - block_align_;
+        peak_size -= (init_size_limit - block_align_) * ITEM_SIZE[op->type_id_];
       }
     }
     return xbuf_mem_size * init_size_limit / peak_size;
@@ -1365,7 +1365,7 @@ int64_t VectorKernel::TileSizeLimit(int64_t live_peak) {
       for (; depth < tile_depth; ++depth) {
         space *= dims[depth];
       }
-      peak_size -= tile_space - space;
+      peak_size -= (tile_space - space) * ITEM_SIZE[op->type_id_];
     }
   }
   return xbuf_mem_size * tile_space / peak_size;
@@ -2148,11 +2148,11 @@ class RemapKernel : public T {
  public:
   void Remap(NDAccess *op, NDAccess *orig) {
     remap_.emplace_back(op, orig);
-    orig->addr_.Update(&orig->addr_.data);
   }
   uint64_t CodeGen() override {
     auto ws_size = T::CodeGen();
     for (auto &r : remap_) {
+      r.second->addr_.Update(&r.second->addr_.data);
       this->code_.BindOpFast(r.first->addr_, r.second->addr_);
     }
     return ws_size;
